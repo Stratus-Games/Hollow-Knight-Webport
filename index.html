@@ -2,9 +2,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"><base href="https://cdn.jsdelivr.net/gh/Stratus-Games/Hollow-Knight-Webport@main/">
+<meta charset="UTF-8">
+<base href="https://cdn.jsdelivr.net/gh/Stratus-Games/Hollow-Knight-Webport@main/">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hollow Knight</title>
+
 <link rel="icon" href="TemplateData/favicon.ico">
 <link rel="stylesheet" href="TemplateData/style.css">
 
@@ -40,8 +42,9 @@ body {
     align-items: center;
     background:
         radial-gradient(ellipse at 50% 100%,
-        rgba(100, 0, 0, 0.24), transparent 65%),
+        rgba(100,0,0,.24), transparent 65%),
         #000;
+    transition: opacity .5s;
 }
 
 #loadingScreen::before {
@@ -60,21 +63,6 @@ body {
     position: relative;
     width: min(480px, 85%);
     text-align: center;
-}
-
-#gameTitle {
-    font-size: 34px;
-    font-weight: 300;
-    letter-spacing: 7px;
-    margin-bottom: 12px;
-    text-transform: uppercase;
-}
-
-#subtitle {
-    color: #777;
-    font-size: 12px;
-    letter-spacing: 3px;
-    margin-bottom: 55px;
 }
 
 #status {
@@ -175,17 +163,18 @@ body {
 }
 
 #unity-canvas {
-    width: 960px;
-    height: 600px;
+    width: min(100vw, 160vh);
+    height: min(62.5vw, 100vh);
     max-width: 100%;
     max-height: calc(100% - 45px);
+    aspect-ratio: 16 / 10;
     background: #000;
 }
 
 #unity-footer {
-    width: 960px;
-    max-width: 100%;
+    width: min(960px, 100%);
     height: 38px;
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -207,12 +196,10 @@ body {
 }
 
 @media(max-width: 600px) {
-    #gameTitle {
-        font-size: 25px;
-    }
-
-    #subtitle {
-        font-size: 10px;
+    #unity-canvas {
+        width: 100vw;
+        height: auto;
+        max-height: calc(100vh - 38px);
     }
 }
 </style>
@@ -235,6 +222,7 @@ body {
             <span>GAME DATA</span>
             <span id="dataCount">0 / 44</span>
         </div>
+
         <div class="small-bar">
             <div class="small-progress" id="dataProgress"></div>
         </div>
@@ -243,6 +231,7 @@ body {
             <span>WEBASSEMBLY</span>
             <span id="wasmCount">0 / 3</span>
         </div>
+
         <div class="small-bar">
             <div class="small-progress" id="wasmProgress"></div>
         </div>
@@ -252,6 +241,7 @@ body {
         </div>
 
         <div id="loadingError"></div>
+
         <button id="retryButton" onclick="location.reload()">
             RETRY
         </button>
@@ -261,7 +251,8 @@ body {
 
 <div id="unity-container">
 
-    <canvas id="unity-canvas"
+    <canvas
+        id="unity-canvas"
         width="960"
         height="600"
         tabindex="-1">
@@ -274,17 +265,18 @@ body {
 
 </div>
 
-<script src="Build/hk.loader.js"></script>
-
 <script>
 "use strict";
 
-/* =========================================
+/* =====================================
    CONFIGURATION
-========================================= */
+===================================== */
 
 const CONFIG = {
-    baseURL: "Build/",
+
+    buildURL: "Build/",
+
+    loader: "hk.loader.js",
 
     dataPrefix: "hk.data",
     wasmPrefix: "hk.wasm",
@@ -292,83 +284,70 @@ const CONFIG = {
     dataParts: 44,
     wasmParts: 3,
 
-    frameworkURL: "Build/hk.framework.js",
-    streamingAssetsURL: "StreamingAssets",
+    framework: "hk.framework.js",
+
+    streamingAssets: "StreamingAssets",
 
     companyName: "Stratus Dev Team",
     productName: "Hollow Knight",
     productVersion: "1.5.12620",
 
-    cacheVersion: "hk-stream-v2"
+    cacheVersion: "hk-stream-v3",
+
+    storageDirectory: "HollowKnightCache"
 };
 
 
-/* =========================================
+/* =====================================
    ELEMENTS
-========================================= */
+===================================== */
 
-const loadingScreen =
-    document.getElementById("loadingScreen");
+const $ = id => document.getElementById(id);
 
-const unityContainer =
-    document.getElementById("unity-container");
+const loadingScreen = $("loadingScreen");
+const unityContainer = $("unity-container");
+const canvas = $("unity-canvas");
 
-const canvas =
-    document.getElementById("unity-canvas");
+const statusText = $("status");
+const details = $("details");
 
-const statusText =
-    document.getElementById("status");
+const overallProgress = $("overallProgress");
+const percentage = $("percentage");
 
-const details =
-    document.getElementById("details");
+const dataProgress = $("dataProgress");
+const wasmProgress = $("wasmProgress");
 
-const overallProgress =
-    document.getElementById("overallProgress");
+const dataCount = $("dataCount");
+const wasmCount = $("wasmCount");
 
-const percentage =
-    document.getElementById("percentage");
-
-const dataProgress =
-    document.getElementById("dataProgress");
-
-const wasmProgress =
-    document.getElementById("wasmProgress");
-
-const dataCount =
-    document.getElementById("dataCount");
-
-const wasmCount =
-    document.getElementById("wasmCount");
-
-const errorElement =
-    document.getElementById("loadingError");
-
-const retryButton =
-    document.getElementById("retryButton");
+const errorElement = $("loadingError");
+const retryButton = $("retryButton");
 
 
-/* =========================================
+/* =====================================
    PROGRESS
-========================================= */
+===================================== */
 
 let completedData = 0;
 let completedWasm = 0;
-let unityProgress = 0;
 
 function setOverall(value) {
-    value = Math.min(100, Math.max(0, value));
+
+    value = Math.max(0, Math.min(100, value));
 
     overallProgress.style.width = value + "%";
-    percentage.textContent = Math.floor(value) + "%";
+
+    percentage.textContent =
+        Math.floor(value) + "%";
 }
 
-function updateMergeProgress() {
+function updateProgress() {
 
     dataProgress.style.width =
-        (completedData / CONFIG.dataParts * 100) + "%";
+        completedData / CONFIG.dataParts * 100 + "%";
 
     wasmProgress.style.width =
-        (completedWasm / CONFIG.wasmParts * 100) + "%";
+        completedWasm / CONFIG.wasmParts * 100 + "%";
 
     dataCount.textContent =
         completedData + " / " + CONFIG.dataParts;
@@ -382,42 +361,55 @@ function updateMergeProgress() {
     const completed =
         completedData + completedWasm;
 
-    // Reserve 30% for Unity initialization.
-    setOverall((completed / total) * 70);
+    // First 70% is file preparation.
+    setOverall(completed / total * 70);
 }
 
 
-/* =========================================
-   OPFS STORAGE
-========================================= */
+/* =====================================
+   STORAGE
+===================================== */
 
 async function initializeStorage() {
 
-    if (!navigator.storage ||
-        !navigator.storage.getDirectory) {
-
+    if (
+        !navigator.storage ||
+        !navigator.storage.getDirectory
+    ) {
         throw new Error(
-            "Your browser does not support OPFS storage. " +
-            "Use a modern version of Chrome or Edge."
+            "OPFS is unavailable. Open this page in a supported browser using HTTPS."
         );
     }
 
-    // Request persistent storage where available.
     if (navigator.storage.persist) {
+
         try {
-            await navigator.storage.persist();
+            const persistent =
+                await navigator.storage.persist();
+
+            console.log(
+                "Persistent storage:",
+                persistent
+            );
+
         } catch (e) {
-            console.warn("Persistent storage request failed", e);
+            console.warn(e);
         }
     }
 
-    return await navigator.storage.getDirectory();
+    const root =
+        await navigator.storage.getDirectory();
+
+    return await root.getDirectoryHandle(
+        CONFIG.storageDirectory,
+        { create: true }
+    );
 }
 
 
-/* =========================================
-   FILE CACHE
-========================================= */
+/* =====================================
+   CACHE VALIDATION
+===================================== */
 
 async function getCachedFile(root, filename) {
 
@@ -427,57 +419,86 @@ async function getCachedFile(root, filename) {
             await root.getFileHandle(filename);
 
         const markerHandle =
-            await root.getFileHandle(filename + ".complete");
+            await root.getFileHandle(
+                filename + ".complete"
+            );
 
-        const file = await fileHandle.getFile();
-        const marker = await markerHandle.getFile();
+        const file =
+            await fileHandle.getFile();
 
-        const markerText = await marker.text();
+        const marker =
+            await markerHandle.getFile();
+
+        const markerText =
+            await marker.text();
 
         if (
             file.size > 0 &&
             markerText ===
                 CONFIG.cacheVersion + ":" + file.size
         ) {
-            console.log("Using cached file:", filename);
+
+            console.log(
+                "Valid cached file:",
+                filename,
+                file.size
+            );
 
             return file;
         }
 
     } catch (e) {
-        // No valid completed cache.
+        console.log(
+            "Cache unavailable:",
+            filename
+        );
     }
 
     return null;
 }
 
 
-/* =========================================
-   SAVE CACHE COMPLETION MARKER
-========================================= */
+/* =====================================
+   CACHE MARKER
+===================================== */
 
-async function markFileComplete(root, filename, fileSize) {
+async function markFileComplete(
+    root,
+    filename,
+    fileSize
+) {
 
-    const markerHandle =
+    const handle =
         await root.getFileHandle(
             filename + ".complete",
             { create: true }
         );
 
     const writer =
-        await markerHandle.createWritable();
+        await handle.createWritable();
 
-    await writer.write(
-        CONFIG.cacheVersion + ":" + fileSize
-    );
+    try {
 
-    await writer.close();
+        await writer.write(
+            CONFIG.cacheVersion + ":" + fileSize
+        );
+
+        await writer.close();
+
+    } catch (error) {
+
+        try {
+            await writer.abort();
+        } catch {}
+
+        throw error;
+    }
 }
 
 
-/* =========================================
-   MEMORY-EFFICIENT MERGER
-========================================= */
+/* =====================================
+   STREAMING MERGER
+===================================== */
 
 async function mergeFile(
     root,
@@ -486,39 +507,37 @@ async function mergeFile(
     progressCallback
 ) {
 
-    const filename = prefix;
-
-    // Check completed persistent cache.
+    // Check completed cache.
     const cached =
-        await getCachedFile(root, filename);
+        await getCachedFile(root, prefix);
 
     if (cached) {
 
-        progressCallback(partCount, 0);
+        progressCallback(partCount);
 
         return cached;
     }
 
-    // Remove old completion marker.
+    // Remove previous completion marker.
     try {
-        await root.removeEntry(filename + ".complete");
+        await root.removeEntry(
+            prefix + ".complete"
+        );
     } catch {}
 
-    // Create output file.
     const outputHandle =
         await root.getFileHandle(
-            filename,
+            prefix,
             { create: true }
         );
 
-    // Clear old incomplete content.
     const writer =
         await outputHandle.createWritable({
             keepExistingData: false
         });
 
-    let completedParts = 0;
     let totalBytes = 0;
+    let completedParts = 0;
 
     try {
 
@@ -529,37 +548,43 @@ async function mergeFile(
                 String(i).padStart(3, "0");
 
             const url =
-                CONFIG.baseURL + partName;
+                CONFIG.buildURL + partName;
 
             statusText.textContent =
                 "Downloading " + partName;
 
             details.textContent =
-                "Streaming directly to browser storage. " +
-                "Part " + (i + 1) + " of " + partCount;
+                "Part " + (i + 1) +
+                " of " + partCount +
+                " — Streaming to storage";
 
-            console.log("Downloading:", url);
+            console.log("Fetching:", url);
 
-            const response = await fetch(url, {
-                cache: "no-store"
-            });
+            const response =
+                await fetch(url, {
+                    cache: "no-store"
+                });
 
             if (!response.ok) {
+
                 throw new Error(
-                    "Failed to download " +
+                    "Download failed: " +
                     partName +
-                    " (HTTP " + response.status + ")"
+                    "\nHTTP " + response.status
                 );
             }
 
             if (!response.body) {
+
                 throw new Error(
-                    "Streaming is unavailable for " + partName
+                    "Streaming unavailable: " + partName
                 );
             }
 
             const reader =
                 response.body.getReader();
+
+            let partBytes = 0;
 
             try {
 
@@ -572,11 +597,14 @@ async function mergeFile(
 
                     const chunk = result.value;
 
-                    // Write this chunk directly to disk.
-                    // Never accumulate the complete file in RAM.
+                    // Sequentially write each chunk.
+                    // Do not accumulate chunks in RAM.
                     await writer.write(chunk);
 
-                    totalBytes += chunk.byteLength;
+                    const size = chunk.byteLength;
+
+                    totalBytes += size;
+                    partBytes += size;
                 }
 
             } finally {
@@ -584,41 +612,57 @@ async function mergeFile(
                 reader.releaseLock();
             }
 
+            if (partBytes === 0) {
+
+                throw new Error(
+                    "Downloaded part is empty: " + partName
+                );
+            }
+
             completedParts++;
 
-            progressCallback(
-                completedParts,
-                totalBytes
+            progressCallback(completedParts);
+
+            console.log(
+                "Finished:",
+                partName,
+                partBytes,
+                "bytes"
             );
 
-            // Let the browser process rendering and UI updates.
+            // Allow UI rendering.
             await new Promise(resolve =>
-                setTimeout(resolve, 0)
+                requestAnimationFrame(resolve)
             );
         }
 
-        // Finish writing the merged file.
+        // Commit the completed output.
         await writer.close();
 
         const mergedFile =
             await outputHandle.getFile();
 
-        if (mergedFile.size <= 0) {
+        if (
+            mergedFile.size !== totalBytes ||
+            mergedFile.size === 0
+        ) {
+
             throw new Error(
-                "The merged file is empty: " + filename
+                "Merged file size validation failed: " +
+                prefix
             );
         }
 
-        // Only mark the file complete after closing successfully.
+        // Only completed files get a cache marker.
         await markFileComplete(
             root,
-            filename,
+            prefix,
             mergedFile.size
         );
 
         console.log(
-            "Successfully merged:",
-            filename,
+            "Merge complete:",
+            prefix,
             mergedFile.size,
             "bytes"
         );
@@ -631,13 +675,15 @@ async function mergeFile(
             await writer.abort();
         } catch {}
 
-        // Remove incomplete output.
+        // Remove corrupted output.
         try {
-            await root.removeEntry(filename);
+            await root.removeEntry(prefix);
         } catch {}
 
         try {
-            await root.removeEntry(filename + ".complete");
+            await root.removeEntry(
+                prefix + ".complete"
+            );
         } catch {}
 
         throw error;
@@ -645,9 +691,9 @@ async function mergeFile(
 }
 
 
-/* =========================================
-   DOWNLOAD AND MERGE DATA
-========================================= */
+/* =====================================
+   PREPARE GAME FILES
+===================================== */
 
 async function prepareGameFiles() {
 
@@ -655,65 +701,73 @@ async function prepareGameFiles() {
         "Initializing storage...";
 
     details.textContent =
-        "Checking available browser storage.";
+        "Checking browser storage.";
 
-    const root = await initializeStorage();
+    const root =
+        await initializeStorage();
 
-    // Check available space when the browser provides an estimate.
     if (navigator.storage.estimate) {
 
         const estimate =
             await navigator.storage.estimate();
 
-        console.log("Storage estimate:", estimate);
+        console.log(
+            "Storage estimate:",
+            estimate
+        );
 
-        if (estimate.quota && estimate.usage) {
+        if (
+            estimate.quota != null &&
+            estimate.usage != null
+        ) {
 
             const available =
                 estimate.quota - estimate.usage;
 
             console.log(
-                "Available estimated storage:",
+                "Available storage:",
                 available
             );
         }
     }
 
-    /* DATA */
+    /* GAME DATA */
 
     statusText.textContent =
         "Preparing game data...";
 
-    const dataFile = await mergeFile(
-        root,
-        CONFIG.dataPrefix,
-        CONFIG.dataParts,
+    const dataFile =
+        await mergeFile(
+            root,
+            CONFIG.dataPrefix,
+            CONFIG.dataParts,
 
-        (completed) => {
+            completed => {
 
-            completedData = completed;
+                completedData = completed;
 
-            updateMergeProgress();
-        }
-    );
+                updateProgress();
+            }
+        );
 
-    /* WASM */
+    /* WEBASSEMBLY */
 
     statusText.textContent =
         "Preparing WebAssembly...";
 
-    const wasmFile = await mergeFile(
-        root,
-        CONFIG.wasmPrefix,
-        CONFIG.wasmParts,
+    const wasmFile =
+        await mergeFile(
+            root,
+            CONFIG.wasmPrefix,
+            CONFIG.wasmParts,
 
-        (completed) => {
+            completed => {
 
-            completedWasm = completed;
+                completedWasm = completed;
 
-            updateMergeProgress();
-        }
-    );
+                updateProgress();
+            }
+        );
 
     return {
         dataFile,
@@ -722,9 +776,56 @@ async function prepareGameFiles() {
 }
 
 
-/* =========================================
-   START UNITY
-========================================= */
+/* =====================================
+   UNITY LOADER
+===================================== */
+
+async function loadUnityLoader() {
+
+    if (typeof createUnityInstance === "function") {
+        return;
+    }
+
+    statusText.textContent =
+        "Loading Unity engine...";
+
+    const script =
+        document.createElement("script");
+
+    script.src =
+        CONFIG.buildURL + CONFIG.loader;
+
+    script.async = true;
+
+    await new Promise((resolve, reject) => {
+
+        script.onload = resolve;
+
+        script.onerror = () => {
+
+            reject(
+                new Error(
+                    "Could not load Unity loader:\n" +
+                    script.src
+                )
+            );
+        };
+
+        document.head.appendChild(script);
+    });
+
+    if (typeof createUnityInstance !== "function") {
+
+        throw new Error(
+            "Unity loader loaded but createUnityInstance is missing."
+        );
+    }
+}
+
+
+/* =====================================
+   START GAME
+===================================== */
 
 async function startGame() {
 
@@ -733,49 +834,66 @@ async function startGame() {
         errorElement.style.display = "none";
         retryButton.style.display = "none";
 
-        statusText.textContent =
-            "Starting Hollow Knight...";
+        completedData = 0;
+        completedWasm = 0;
 
-        const files = await prepareGameFiles();
+        updateProgress();
 
         statusText.textContent =
-            "Initializing Unity...";
+            "Preparing Hollow Knight...";
+
+        const files =
+            await prepareGameFiles();
+
+        statusText.textContent =
+            "Loading Unity engine...";
 
         details.textContent =
-            "Loading the game engine.";
+            "Preparing WebAssembly and game data.";
 
         setOverall(70);
 
-        // The Blob URLs let Unity load the merged files.
-        const dataURL = URL.createObjectURL(
-            files.dataFile
-        );
+        // Create URLs without reading the complete
+        // files into JavaScript ArrayBuffers.
 
-        const wasmURL = URL.createObjectURL(
+        const dataURL =
+            URL.createObjectURL(files.dataFile);
+
+        const wasmBlob =
             new Blob(
                 [files.wasmFile],
                 { type: "application/wasm" }
-            )
-        );
+            );
 
-        // Release the original references after URLs are created.
-        // Keep URLs alive until the game is finished.
+        const wasmURL =
+            URL.createObjectURL(wasmBlob);
+
+        // Keep these URLs alive while Unity runs.
         window.hollowKnightBlobURLs = [
             dataURL,
             wasmURL
         ];
+
+        const buildURL =
+            new URL(
+                CONFIG.buildURL,
+                document.baseURI
+            ).href;
 
         const config = {
 
             dataUrl: dataURL,
 
             frameworkUrl:
-                CONFIG.frameworkURL,
+                buildURL + CONFIG.framework,
 
             codeUrl: wasmURL,
 
             streamingAssetsUrl:
-                CONFIG.streamingAssetsURL,
+                new URL(
+                    CONFIG.streamingAssets,
+                    document.baseURI
+                ).href,
 
             companyName:
                 CONFIG.companyName,
@@ -787,7 +905,15 @@ async function startGame() {
                 CONFIG.productVersion
         };
 
-        // Make the Unity canvas visible.
+        // Load the Unity loader with error handling.
+        await loadUnityLoader();
+
+        statusText.textContent =
+            "Starting Hollow Knight...";
+
+        details.textContent =
+            "Initializing the game engine.";
+
         unityContainer.style.display = "flex";
 
         canvas.style.visibility = "hidden";
@@ -797,12 +923,10 @@ async function startGame() {
                 canvas,
                 config,
 
-                (progress) => {
-
-                    unityProgress = progress;
+                progress => {
 
                     const value =
-                        70 + (progress * 30);
+                        70 + progress * 30;
 
                     setOverall(value);
 
@@ -814,7 +938,8 @@ async function startGame() {
                 }
             );
 
-        window.unityInstance = unityInstance;
+        window.unityInstance =
+            unityInstance;
 
         canvas.style.visibility = "visible";
 
@@ -826,21 +951,24 @@ async function startGame() {
         details.textContent =
             "Enjoy your game.";
 
-        // Remove loading overlay.
+        // Hide loading screen.
         loadingScreen.style.opacity = "0";
-        loadingScreen.style.transition = "opacity .5s";
 
         setTimeout(() => {
+
             loadingScreen.style.display = "none";
+
         }, 500);
 
-        // Fullscreen.
-        document.getElementById(
-            "fullscreenButton"
-        ).onclick = () => {
+        // Fullscreen button.
+        $("fullscreenButton").onclick = () => {
 
             unityInstance.SetFullscreen(1);
         };
+
+        console.log(
+            "Hollow Knight started successfully."
+        );
 
     } catch (error) {
 
@@ -849,25 +977,28 @@ async function startGame() {
             error
         );
 
+        unityContainer.style.display = "none";
+
         statusText.textContent =
             "Unable to load Hollow Knight";
 
         errorElement.style.display = "block";
 
         errorElement.textContent =
-            error.message || String(error);
+            error.stack || error.message || String(error);
 
-        retryButton.style.display = "inline-block";
+        retryButton.style.display =
+            "inline-block";
 
         details.textContent =
-            "Check the console for additional information.";
+            "An error occurred. Check the error message above.";
     }
 }
 
 
-/* =========================================
-   START
-========================================= */
+/* =====================================
+   INITIALIZE
+===================================== */
 
 window.addEventListener("load", () => {
 
