@@ -1,0 +1,881 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hollow Knight</title>
+<link rel="icon" href="TemplateData/favicon.ico">
+<link rel="stylesheet" href="TemplateData/style.css">
+
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    font-family: Arial, sans-serif;
+    color: white;
+}
+
+body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#loadingScreen {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background:
+        radial-gradient(ellipse at 50% 100%,
+        rgba(100, 0, 0, 0.24), transparent 65%),
+        #000;
+}
+
+#loadingScreen::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(
+        ellipse at center,
+        transparent 20%,
+        rgba(0,0,0,.8) 100%
+    );
+}
+
+.loader-content {
+    position: relative;
+    width: min(480px, 85%);
+    text-align: center;
+}
+
+#gameTitle {
+    font-size: 34px;
+    font-weight: 300;
+    letter-spacing: 7px;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+}
+
+#subtitle {
+    color: #777;
+    font-size: 12px;
+    letter-spacing: 3px;
+    margin-bottom: 55px;
+}
+
+#status {
+    font-size: 14px;
+    color: #ddd;
+    margin-bottom: 12px;
+}
+
+#overallBar {
+    height: 5px;
+    width: 100%;
+    background: #222;
+    overflow: hidden;
+    border-radius: 5px;
+}
+
+#overallProgress {
+    width: 0%;
+    height: 100%;
+    background: #bd1717;
+    box-shadow: 0 0 15px #b00000;
+    transition: width .2s ease;
+}
+
+.progress-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: #888;
+    margin-top: 24px;
+    margin-bottom: 8px;
+}
+
+.small-bar {
+    width: 100%;
+    height: 3px;
+    background: #191919;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.small-progress {
+    height: 100%;
+    width: 0%;
+    background: #a51616;
+    transition: width .15s;
+}
+
+#percentage {
+    margin-top: 18px;
+    font-size: 13px;
+    color: #aaa;
+    letter-spacing: 2px;
+}
+
+#details {
+    margin-top: 24px;
+    color: #555;
+    font-size: 11px;
+    line-height: 1.8;
+}
+
+#loadingError {
+    display: none;
+    margin-top: 25px;
+    color: #ff5555;
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+#retryButton {
+    display: none;
+    margin-top: 20px;
+    border: 1px solid #941818;
+    background: #210707;
+    color: white;
+    padding: 12px 28px;
+    cursor: pointer;
+    letter-spacing: 2px;
+}
+
+#retryButton:hover {
+    background: #481010;
+}
+
+#unity-container {
+    display: none;
+    width: 100%;
+    height: 100%;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+}
+
+#unity-canvas {
+    width: 960px;
+    height: 600px;
+    max-width: 100%;
+    max-height: calc(100% - 45px);
+    background: #000;
+}
+
+#unity-footer {
+    width: 960px;
+    max-width: 100%;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px;
+    color: #777;
+    font-size: 12px;
+}
+
+#fullscreenButton {
+    background: #171717;
+    border: 1px solid #333;
+    color: white;
+    padding: 7px 15px;
+    cursor: pointer;
+}
+
+#fullscreenButton:hover {
+    background: #333;
+}
+
+@media(max-width: 600px) {
+    #gameTitle {
+        font-size: 25px;
+    }
+
+    #subtitle {
+        font-size: 10px;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<div id="loadingScreen">
+    <div class="loader-content">
+
+        <div id="status">Preparing game...</div>
+
+        <div id="overallBar">
+            <div id="overallProgress"></div>
+        </div>
+
+        <div id="percentage">0%</div>
+
+        <div class="progress-row">
+            <span>GAME DATA</span>
+            <span id="dataCount">0 / 44</span>
+        </div>
+        <div class="small-bar">
+            <div class="small-progress" id="dataProgress"></div>
+        </div>
+
+        <div class="progress-row">
+            <span>WEBASSEMBLY</span>
+            <span id="wasmCount">0 / 3</span>
+        </div>
+        <div class="small-bar">
+            <div class="small-progress" id="wasmProgress"></div>
+        </div>
+
+        <div id="details">
+            Initializing storage...
+        </div>
+
+        <div id="loadingError"></div>
+        <button id="retryButton" onclick="location.reload()">
+            RETRY
+        </button>
+
+    </div>
+</div>
+
+<div id="unity-container">
+
+    <canvas id="unity-canvas"
+        width="960"
+        height="600"
+        tabindex="-1">
+    </canvas>
+
+    <div id="unity-footer">
+        <span>Hollow Knight</span>
+        <button id="fullscreenButton">FULLSCREEN</button>
+    </div>
+
+</div>
+
+<script src="Build/hk.loader.js"></script>
+
+<script>
+"use strict";
+
+/* =========================================
+   CONFIGURATION
+========================================= */
+
+const CONFIG = {
+    baseURL: "Build/",
+
+    dataPrefix: "hk.data",
+    wasmPrefix: "hk.wasm",
+
+    dataParts: 44,
+    wasmParts: 3,
+
+    frameworkURL: "Build/hk.framework.js",
+    streamingAssetsURL: "StreamingAssets",
+
+    companyName: "Stratus Dev Team",
+    productName: "Hollow Knight",
+    productVersion: "1.5.12620",
+
+    cacheVersion: "hk-stream-v2"
+};
+
+
+/* =========================================
+   ELEMENTS
+========================================= */
+
+const loadingScreen =
+    document.getElementById("loadingScreen");
+
+const unityContainer =
+    document.getElementById("unity-container");
+
+const canvas =
+    document.getElementById("unity-canvas");
+
+const statusText =
+    document.getElementById("status");
+
+const details =
+    document.getElementById("details");
+
+const overallProgress =
+    document.getElementById("overallProgress");
+
+const percentage =
+    document.getElementById("percentage");
+
+const dataProgress =
+    document.getElementById("dataProgress");
+
+const wasmProgress =
+    document.getElementById("wasmProgress");
+
+const dataCount =
+    document.getElementById("dataCount");
+
+const wasmCount =
+    document.getElementById("wasmCount");
+
+const errorElement =
+    document.getElementById("loadingError");
+
+const retryButton =
+    document.getElementById("retryButton");
+
+
+/* =========================================
+   PROGRESS
+========================================= */
+
+let completedData = 0;
+let completedWasm = 0;
+let unityProgress = 0;
+
+function setOverall(value) {
+    value = Math.min(100, Math.max(0, value));
+
+    overallProgress.style.width = value + "%";
+    percentage.textContent = Math.floor(value) + "%";
+}
+
+function updateMergeProgress() {
+
+    dataProgress.style.width =
+        (completedData / CONFIG.dataParts * 100) + "%";
+
+    wasmProgress.style.width =
+        (completedWasm / CONFIG.wasmParts * 100) + "%";
+
+    dataCount.textContent =
+        completedData + " / " + CONFIG.dataParts;
+
+    wasmCount.textContent =
+        completedWasm + " / " + CONFIG.wasmParts;
+
+    const total =
+        CONFIG.dataParts + CONFIG.wasmParts;
+
+    const completed =
+        completedData + completedWasm;
+
+    // Reserve 30% for Unity initialization.
+    setOverall((completed / total) * 70);
+}
+
+
+/* =========================================
+   OPFS STORAGE
+========================================= */
+
+async function initializeStorage() {
+
+    if (!navigator.storage ||
+        !navigator.storage.getDirectory) {
+
+        throw new Error(
+            "Your browser does not support OPFS storage. " +
+            "Use a modern version of Chrome or Edge."
+        );
+    }
+
+    // Request persistent storage where available.
+    if (navigator.storage.persist) {
+        try {
+            await navigator.storage.persist();
+        } catch (e) {
+            console.warn("Persistent storage request failed", e);
+        }
+    }
+
+    return await navigator.storage.getDirectory();
+}
+
+
+/* =========================================
+   FILE CACHE
+========================================= */
+
+async function getCachedFile(root, filename) {
+
+    try {
+
+        const fileHandle =
+            await root.getFileHandle(filename);
+
+        const markerHandle =
+            await root.getFileHandle(filename + ".complete");
+
+        const file = await fileHandle.getFile();
+        const marker = await markerHandle.getFile();
+
+        const markerText = await marker.text();
+
+        if (
+            file.size > 0 &&
+            markerText ===
+                CONFIG.cacheVersion + ":" + file.size
+        ) {
+            console.log("Using cached file:", filename);
+
+            return file;
+        }
+
+    } catch (e) {
+        // No valid completed cache.
+    }
+
+    return null;
+}
+
+
+/* =========================================
+   SAVE CACHE COMPLETION MARKER
+========================================= */
+
+async function markFileComplete(root, filename, fileSize) {
+
+    const markerHandle =
+        await root.getFileHandle(
+            filename + ".complete",
+            { create: true }
+        );
+
+    const writer =
+        await markerHandle.createWritable();
+
+    await writer.write(
+        CONFIG.cacheVersion + ":" + fileSize
+    );
+
+    await writer.close();
+}
+
+
+/* =========================================
+   MEMORY-EFFICIENT MERGER
+========================================= */
+
+async function mergeFile(
+    root,
+    prefix,
+    partCount,
+    progressCallback
+) {
+
+    const filename = prefix;
+
+    // Check completed persistent cache.
+    const cached =
+        await getCachedFile(root, filename);
+
+    if (cached) {
+
+        progressCallback(partCount, 0);
+
+        return cached;
+    }
+
+    // Remove old completion marker.
+    try {
+        await root.removeEntry(filename + ".complete");
+    } catch {}
+
+    // Create output file.
+    const outputHandle =
+        await root.getFileHandle(
+            filename,
+            { create: true }
+        );
+
+    // Clear old incomplete content.
+    const writer =
+        await outputHandle.createWritable({
+            keepExistingData: false
+        });
+
+    let completedParts = 0;
+    let totalBytes = 0;
+
+    try {
+
+        for (let i = 0; i < partCount; i++) {
+
+            const partName =
+                prefix + "." +
+                String(i).padStart(3, "0");
+
+            const url =
+                CONFIG.baseURL + partName;
+
+            statusText.textContent =
+                "Downloading " + partName;
+
+            details.textContent =
+                "Streaming directly to browser storage. " +
+                "Part " + (i + 1) + " of " + partCount;
+
+            console.log("Downloading:", url);
+
+            const response = await fetch(url, {
+                cache: "no-store"
+            });
+
+            if (!response.ok) {
+                throw new Error(
+                    "Failed to download " +
+                    partName +
+                    " (HTTP " + response.status + ")"
+                );
+            }
+
+            if (!response.body) {
+                throw new Error(
+                    "Streaming is unavailable for " + partName
+                );
+            }
+
+            const reader =
+                response.body.getReader();
+
+            try {
+
+                while (true) {
+
+                    const result =
+                        await reader.read();
+
+                    if (result.done) break;
+
+                    const chunk = result.value;
+
+                    // Write this chunk directly to disk.
+                    // Never accumulate the complete file in RAM.
+                    await writer.write(chunk);
+
+                    totalBytes += chunk.byteLength;
+                }
+
+            } finally {
+
+                reader.releaseLock();
+            }
+
+            completedParts++;
+
+            progressCallback(
+                completedParts,
+                totalBytes
+            );
+
+            // Let the browser process rendering and UI updates.
+            await new Promise(resolve =>
+                setTimeout(resolve, 0)
+            );
+        }
+
+        // Finish writing the merged file.
+        await writer.close();
+
+        const mergedFile =
+            await outputHandle.getFile();
+
+        if (mergedFile.size <= 0) {
+            throw new Error(
+                "The merged file is empty: " + filename
+            );
+        }
+
+        // Only mark the file complete after closing successfully.
+        await markFileComplete(
+            root,
+            filename,
+            mergedFile.size
+        );
+
+        console.log(
+            "Successfully merged:",
+            filename,
+            mergedFile.size,
+            "bytes"
+        );
+
+        return mergedFile;
+
+    } catch (error) {
+
+        try {
+            await writer.abort();
+        } catch {}
+
+        // Remove incomplete output.
+        try {
+            await root.removeEntry(filename);
+        } catch {}
+
+        try {
+            await root.removeEntry(filename + ".complete");
+        } catch {}
+
+        throw error;
+    }
+}
+
+
+/* =========================================
+   DOWNLOAD AND MERGE DATA
+========================================= */
+
+async function prepareGameFiles() {
+
+    statusText.textContent =
+        "Initializing storage...";
+
+    details.textContent =
+        "Checking available browser storage.";
+
+    const root = await initializeStorage();
+
+    // Check available space when the browser provides an estimate.
+    if (navigator.storage.estimate) {
+
+        const estimate =
+            await navigator.storage.estimate();
+
+        console.log("Storage estimate:", estimate);
+
+        if (estimate.quota && estimate.usage) {
+
+            const available =
+                estimate.quota - estimate.usage;
+
+            console.log(
+                "Available estimated storage:",
+                available
+            );
+        }
+    }
+
+    /* DATA */
+
+    statusText.textContent =
+        "Preparing game data...";
+
+    const dataFile = await mergeFile(
+        root,
+        CONFIG.dataPrefix,
+        CONFIG.dataParts,
+
+        (completed) => {
+
+            completedData = completed;
+
+            updateMergeProgress();
+        }
+    );
+
+    /* WASM */
+
+    statusText.textContent =
+        "Preparing WebAssembly...";
+
+    const wasmFile = await mergeFile(
+        root,
+        CONFIG.wasmPrefix,
+        CONFIG.wasmParts,
+
+        (completed) => {
+
+            completedWasm = completed;
+
+            updateMergeProgress();
+        }
+    );
+
+    return {
+        dataFile,
+        wasmFile
+    };
+}
+
+
+/* =========================================
+   START UNITY
+========================================= */
+
+async function startGame() {
+
+    try {
+
+        errorElement.style.display = "none";
+        retryButton.style.display = "none";
+
+        statusText.textContent =
+            "Starting Hollow Knight...";
+
+        const files = await prepareGameFiles();
+
+        statusText.textContent =
+            "Initializing Unity...";
+
+        details.textContent =
+            "Loading the game engine.";
+
+        setOverall(70);
+
+        // The Blob URLs let Unity load the merged files.
+        const dataURL = URL.createObjectURL(
+            files.dataFile
+        );
+
+        const wasmURL = URL.createObjectURL(
+            new Blob(
+                [files.wasmFile],
+                { type: "application/wasm" }
+            )
+        );
+
+        // Release the original references after URLs are created.
+        // Keep URLs alive until the game is finished.
+        window.hollowKnightBlobURLs = [
+            dataURL,
+            wasmURL
+        ];
+
+        const config = {
+
+            dataUrl: dataURL,
+
+            frameworkUrl:
+                CONFIG.frameworkURL,
+
+            codeUrl: wasmURL,
+
+            streamingAssetsUrl:
+                CONFIG.streamingAssetsURL,
+
+            companyName:
+                CONFIG.companyName,
+
+            productName:
+                CONFIG.productName,
+
+            productVersion:
+                CONFIG.productVersion
+        };
+
+        // Make the Unity canvas visible.
+        unityContainer.style.display = "flex";
+
+        canvas.style.visibility = "hidden";
+
+        const unityInstance =
+            await createUnityInstance(
+                canvas,
+                config,
+
+                (progress) => {
+
+                    unityProgress = progress;
+
+                    const value =
+                        70 + (progress * 30);
+
+                    setOverall(value);
+
+                    statusText.textContent =
+                        "Loading Hollow Knight...";
+
+                    details.textContent =
+                        "Initializing game engine.";
+                }
+            );
+
+        window.unityInstance = unityInstance;
+
+        canvas.style.visibility = "visible";
+
+        setOverall(100);
+
+        statusText.textContent =
+            "Hollow Knight ready";
+
+        details.textContent =
+            "Enjoy your game.";
+
+        // Remove loading overlay.
+        loadingScreen.style.opacity = "0";
+        loadingScreen.style.transition = "opacity .5s";
+
+        setTimeout(() => {
+            loadingScreen.style.display = "none";
+        }, 500);
+
+        // Fullscreen.
+        document.getElementById(
+            "fullscreenButton"
+        ).onclick = () => {
+
+            unityInstance.SetFullscreen(1);
+        };
+
+    } catch (error) {
+
+        console.error(
+            "Hollow Knight loading error:",
+            error
+        );
+
+        statusText.textContent =
+            "Unable to load Hollow Knight";
+
+        errorElement.style.display = "block";
+
+        errorElement.textContent =
+            error.message || String(error);
+
+        retryButton.style.display = "inline-block";
+
+        details.textContent =
+            "Check the console for additional information.";
+    }
+}
+
+
+/* =========================================
+   START
+========================================= */
+
+window.addEventListener("load", () => {
+
+    startGame();
+
+});
+
+</script>
+
+</body>
+</html>
