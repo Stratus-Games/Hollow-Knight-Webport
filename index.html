@@ -3,7 +3,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<base href="https://cdn.jsdelivr.net/gh/Stratus-Games/Hollow-Knight-Webport@main/">
+
+<base href="https://raw.githack.com/Stratus-Games/Hollow-Knight-Webport/main/">
+
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hollow Knight</title>
 
@@ -120,9 +122,10 @@ body {
 
 #details {
     margin-top: 24px;
-    color: #555;
+    color: #777;
     font-size: 11px;
     line-height: 1.8;
+    overflow-wrap: anywhere;
 }
 
 #loadingError {
@@ -242,7 +245,7 @@ body {
 
         <div id="loadingError"></div>
 
-        <button id="retryButton" onclick="location.reload()">
+        <button id="retryButton" onclick="startGame()">
             RETRY
         </button>
 
@@ -268,14 +271,12 @@ body {
 <script>
 "use strict";
 
-/* =====================================
+/* =========================================
    CONFIGURATION
-===================================== */
+========================================= */
 
 const CONFIG = {
-
     buildURL: "Build/",
-
     loader: "hk.loader.js",
 
     dataPrefix: "hk.data",
@@ -285,22 +286,22 @@ const CONFIG = {
     wasmParts: 3,
 
     framework: "hk.framework.js",
-
     streamingAssets: "StreamingAssets",
 
     companyName: "Stratus Dev Team",
     productName: "Hollow Knight",
     productVersion: "1.5.12620",
 
-    cacheVersion: "hk-stream-v3",
+    cacheVersion: "hk-file-v4",
+    storageDirectory: "HollowKnightCache",
 
-    storageDirectory: "HollowKnightCache"
+    databaseName: "HollowKnightFileCache"
 };
 
 
-/* =====================================
+/* =========================================
    ELEMENTS
-===================================== */
+========================================= */
 
 const $ = id => document.getElementById(id);
 
@@ -323,26 +324,28 @@ const wasmCount = $("wasmCount");
 const errorElement = $("loadingError");
 const retryButton = $("retryButton");
 
-
-/* =====================================
-   PROGRESS
-===================================== */
-
 let completedData = 0;
 let completedWasm = 0;
 
-function setOverall(value) {
+let storageMode = null;
+let storageRoot = null;
+let database = null;
 
+let starting = false;
+
+
+/* =========================================
+   PROGRESS
+========================================= */
+
+function setOverall(value) {
     value = Math.max(0, Math.min(100, value));
 
     overallProgress.style.width = value + "%";
-
-    percentage.textContent =
-        Math.floor(value) + "%";
+    percentage.textContent = Math.floor(value) + "%";
 }
 
 function updateProgress() {
-
     dataProgress.style.width =
         completedData / CONFIG.dataParts * 100 + "%";
 
@@ -355,82 +358,223 @@ function updateProgress() {
     wasmCount.textContent =
         completedWasm + " / " + CONFIG.wasmParts;
 
-    const total =
-        CONFIG.dataParts + CONFIG.wasmParts;
+    const total = CONFIG.dataParts + CONFIG.wasmParts;
+    const completed = completedData + completedWasm;
 
-    const completed =
-        completedData + completedWasm;
-
-    // First 70% is file preparation.
     setOverall(completed / total * 70);
 }
 
-
-/* =====================================
-   STORAGE
-===================================== */
-
-async function initializeStorage() {
-
-    if (
-        !navigator.storage ||
-        !navigator.storage.getDirectory
-    ) {
-        throw new Error(
-            "OPFS is unavailable. Open this page in a supported browser using HTTPS."
-        );
+function updatePartProgress(prefix, completed) {
+    if (prefix === CONFIG.dataPrefix) {
+        completedData = completed;
+    } else {
+        completedWasm = completed;
     }
 
-    if (navigator.storage.persist) {
+    updateProgress();
+}
 
-        try {
-            const persistent =
-                await navigator.storage.persist();
-
-            console.log(
-                "Persistent storage:",
-                persistent
-            );
-
-        } catch (e) {
-            console.warn(e);
-        }
-    }
-
-    const root =
-        await navigator.storage.getDirectory();
-
-    return await root.getDirectoryHandle(
-        CONFIG.storageDirectory,
-        { create: true }
-    );
+function yieldUI() {
+    return new Promise(resolve => {
+        requestAnimationFrame(resolve);
+    });
 }
 
 
-/* =====================================
-   CACHE VALIDATION
-===================================== */
+/* =========================================
+   INDEXEDDB
+========================================= */
 
-async function getCachedFile(root, filename) {
+function openDatabase() {
+    return new Promise((resolve, reject) => {
+
+        if (!window.indexedDB) {
+            reject(new Error(
+                "IndexedDB is unavailable in this browser."
+            ));
+            return;
+        }
+
+        const request = indexedDB.open(
+            CONFIG.databaseName,
+            1
+        );
+
+        request.onupgradeneeded = () => {
+            const db = request.result;
+
+            if (!db.objectStoreNames.contains("files")) {
+                db.createObjectStore("files");
+            }
+        };
+
+        request.onsuccess = () => {
+            resolve(request.result);
+        };
+
+        request.onerror = () => {
+            reject(
+                request.error ||
+                new Error("Could not open IndexedDB.")
+            );
+        };
+
+        request.onblocked = () => {
+            reject(new Error(
+                "IndexedDB is blocked by another browser connection."
+            ));
+        };
+    });
+}
+
+function idbGet(key) {
+    return new Promise((resolve, reject) => {
+
+        const transaction = database.transaction(
+            "files",
+            "readonly"
+        );
+
+        const request = transaction
+            .objectStore("files")
+            .get(key);
+
+        request.onsuccess = () => resolve(request.result);
+
+        request.onerror = () => reject(request.error);
+    });
+}
+
+function idbPut(key, value) {
+    return new Promise((resolve, reject) => {
+
+        const transaction = database.transaction(
+            "files",
+            "readwrite"
+        );
+
+        transaction.objectStore("files").put(value, key);
+
+        transaction.oncomplete = resolve;
+
+        transaction.onerror = () => reject(transaction.error);
+
+        transaction.onabort = () => reject(transaction.error);
+    });
+}
+
+function idbDelete(key) {
+    return new Promise((resolve, reject) => {
+
+        const transaction = database.transaction(
+            "files",
+            "readwrite"
+        );
+
+        transaction.objectStore("files").delete(key);
+
+        transaction.oncomplete = resolve;
+
+        transaction.onerror = () => reject(transaction.error);
+    });
+}
+
+
+/* =========================================
+   STORAGE INITIALIZATION
+========================================= */
+
+async function initializeStorage() {
+
+    statusText.textContent = "Initializing storage...";
+    details.textContent = "Checking available browser storage.";
+
+    // Try OPFS first.
+    try {
+
+        if (
+            navigator.storage &&
+            typeof navigator.storage.getDirectory === "function"
+        ) {
+
+            if (navigator.storage.persist) {
+                try {
+                    await navigator.storage.persist();
+                } catch (e) {
+                    console.warn("Persistence request:", e);
+                }
+            }
+
+            const root = await navigator.storage.getDirectory();
+
+            storageRoot = await root.getDirectoryHandle(
+                CONFIG.storageDirectory,
+                { create: true }
+            );
+
+            storageMode = "opfs";
+
+            console.log("Using OPFS storage.");
+
+            details.textContent =
+                "Using disk-backed storage.";
+
+            return;
+        }
+
+    } catch (error) {
+
+        console.warn("OPFS unavailable. Trying IndexedDB.", error);
+
+    }
+
+    // Fallback to IndexedDB.
+    try {
+
+        database = await openDatabase();
+
+        storageMode = "indexeddb";
+
+        console.log("Using IndexedDB storage.");
+
+        details.textContent =
+            "Using IndexedDB storage.";
+
+        return;
+
+    } catch (error) {
+
+        throw new Error(
+            "No usable browser storage system is available.\n\n" +
+            "Storage error: " + error.message + "\n\n" +
+            "Your browser may restrict storage for file:// pages. " +
+            "Try a browser that supports local-file IndexedDB."
+        );
+    }
+}
+
+
+/* =========================================
+   OPFS CACHE VALIDATION
+========================================= */
+
+async function getOPFSCachedFile(filename) {
 
     try {
 
         const fileHandle =
-            await root.getFileHandle(filename);
+            await storageRoot.getFileHandle(filename);
 
         const markerHandle =
-            await root.getFileHandle(
+            await storageRoot.getFileHandle(
                 filename + ".complete"
             );
 
-        const file =
-            await fileHandle.getFile();
+        const file = await fileHandle.getFile();
 
-        const marker =
-            await markerHandle.getFile();
+        const marker = await markerHandle.getFile();
 
-        const markerText =
-            await marker.text();
+        const markerText = await marker.text();
 
         if (
             file.size > 0 &&
@@ -439,7 +583,7 @@ async function getCachedFile(root, filename) {
         ) {
 
             console.log(
-                "Valid cached file:",
+                "Valid OPFS cache:",
                 filename,
                 file.size
             );
@@ -447,40 +591,70 @@ async function getCachedFile(root, filename) {
             return file;
         }
 
-    } catch (e) {
-        console.log(
-            "Cache unavailable:",
-            filename
-        );
+    } catch (error) {
+        console.log("OPFS cache miss:", filename);
     }
 
     return null;
 }
 
 
-/* =====================================
-   CACHE MARKER
-===================================== */
+/* =========================================
+   INDEXEDDB CACHE VALIDATION
+========================================= */
 
-async function markFileComplete(
-    root,
-    filename,
-    fileSize
-) {
+async function getIDBCachedFile(filename) {
+
+    try {
+
+        const cached = await idbGet(
+            CONFIG.cacheVersion + ":" + filename
+        );
+
+        if (
+            cached &&
+            cached.blob instanceof Blob &&
+            cached.blob.size > 0 &&
+            cached.size === cached.blob.size
+        ) {
+
+            console.log(
+                "Valid IndexedDB cache:",
+                filename,
+                cached.size
+            );
+
+            return cached.blob;
+        }
+
+    } catch (error) {
+
+        console.warn("IndexedDB cache read failed:", error);
+
+    }
+
+    return null;
+}
+
+
+/* =========================================
+   OPFS CACHE MARKER
+========================================= */
+
+async function markOPFSComplete(filename, size) {
 
     const handle =
-        await root.getFileHandle(
+        await storageRoot.getFileHandle(
             filename + ".complete",
             { create: true }
         );
 
-    const writer =
-        await handle.createWritable();
+    const writer = await handle.createWritable();
 
     try {
 
         await writer.write(
-            CONFIG.cacheVersion + ":" + fileSize
+            CONFIG.cacheVersion + ":" + size
         );
 
         await writer.close();
@@ -496,20 +670,18 @@ async function markFileComplete(
 }
 
 
-/* =====================================
-   STREAMING MERGER
-===================================== */
+/* =========================================
+   OPFS STREAMING MERGER
+========================================= */
 
-async function mergeFile(
-    root,
+async function mergeOPFS(
     prefix,
     partCount,
     progressCallback
 ) {
 
-    // Check completed cache.
     const cached =
-        await getCachedFile(root, prefix);
+        await getOPFSCachedFile(prefix);
 
     if (cached) {
 
@@ -518,15 +690,12 @@ async function mergeFile(
         return cached;
     }
 
-    // Remove previous completion marker.
     try {
-        await root.removeEntry(
-            prefix + ".complete"
-        );
+        await storageRoot.removeEntry(prefix + ".complete");
     } catch {}
 
     const outputHandle =
-        await root.getFileHandle(
+        await storageRoot.getFileHandle(
             prefix,
             { create: true }
         );
@@ -537,7 +706,6 @@ async function mergeFile(
         });
 
     let totalBytes = 0;
-    let completedParts = 0;
 
     try {
 
@@ -547,8 +715,7 @@ async function mergeFile(
                 prefix + "." +
                 String(i).padStart(3, "0");
 
-            const url =
-                CONFIG.buildURL + partName;
+            const url = CONFIG.buildURL + partName;
 
             statusText.textContent =
                 "Downloading " + partName;
@@ -556,33 +723,26 @@ async function mergeFile(
             details.textContent =
                 "Part " + (i + 1) +
                 " of " + partCount +
-                " — Streaming to storage";
+                " — Writing directly to storage";
 
-            console.log("Fetching:", url);
-
-            const response =
-                await fetch(url, {
-                    cache: "no-store"
-                });
+            const response = await fetch(url, {
+                cache: "no-store"
+            });
 
             if (!response.ok) {
-
                 throw new Error(
-                    "Download failed: " +
-                    partName +
+                    "Download failed: " + partName +
                     "\nHTTP " + response.status
                 );
             }
 
             if (!response.body) {
-
                 throw new Error(
-                    "Streaming unavailable: " + partName
+                    "Streaming is unavailable for " + partName
                 );
             }
 
-            const reader =
-                response.body.getReader();
+            const reader = response.body.getReader();
 
             let partBytes = 0;
 
@@ -590,21 +750,16 @@ async function mergeFile(
 
                 while (true) {
 
-                    const result =
-                        await reader.read();
+                    const result = await reader.read();
 
                     if (result.done) break;
 
                     const chunk = result.value;
 
-                    // Sequentially write each chunk.
-                    // Do not accumulate chunks in RAM.
                     await writer.write(chunk);
 
-                    const size = chunk.byteLength;
-
-                    totalBytes += size;
-                    partBytes += size;
+                    totalBytes += chunk.byteLength;
+                    partBytes += chunk.byteLength;
                 }
 
             } finally {
@@ -613,59 +768,36 @@ async function mergeFile(
             }
 
             if (partBytes === 0) {
-
                 throw new Error(
                     "Downloaded part is empty: " + partName
                 );
             }
 
-            completedParts++;
-
-            progressCallback(completedParts);
+            progressCallback(i + 1);
 
             console.log(
-                "Finished:",
+                "Downloaded:",
                 partName,
-                partBytes,
-                "bytes"
+                partBytes
             );
 
-            // Allow UI rendering.
-            await new Promise(resolve =>
-                requestAnimationFrame(resolve)
-            );
+            await yieldUI();
         }
 
-        // Commit the completed output.
         await writer.close();
 
-        const mergedFile =
-            await outputHandle.getFile();
+        const mergedFile = await outputHandle.getFile();
 
         if (
-            mergedFile.size !== totalBytes ||
-            mergedFile.size === 0
+            mergedFile.size === 0 ||
+            mergedFile.size !== totalBytes
         ) {
-
             throw new Error(
-                "Merged file size validation failed: " +
-                prefix
+                "Merged file size validation failed: " + prefix
             );
         }
 
-        // Only completed files get a cache marker.
-        await markFileComplete(
-            root,
-            prefix,
-            mergedFile.size
-        );
-
-        console.log(
-            "Merge complete:",
-            prefix,
-            mergedFile.size,
-            "bytes"
-        );
+        await markOPFSComplete(prefix, mergedFile.size);
 
         return mergedFile;
 
@@ -675,15 +807,12 @@ async function mergeFile(
             await writer.abort();
         } catch {}
 
-        // Remove corrupted output.
         try {
-            await root.removeEntry(prefix);
+            await storageRoot.removeEntry(prefix);
         } catch {}
 
         try {
-            await root.removeEntry(
-                prefix + ".complete"
-            );
+            await storageRoot.removeEntry(prefix + ".complete");
         } catch {}
 
         throw error;
@@ -691,83 +820,210 @@ async function mergeFile(
 }
 
 
-/* =====================================
+/* =========================================
+   INDEXEDDB PART MERGER
+========================================= */
+
+async function mergeIndexedDB(
+    prefix,
+    partCount,
+    progressCallback
+) {
+
+    const cached = await getIDBCachedFile(prefix);
+
+    if (cached) {
+
+        progressCallback(partCount);
+
+        return cached;
+    }
+
+    const parts = [];
+    let totalBytes = 0;
+
+    for (let i = 0; i < partCount; i++) {
+
+        const partName =
+            prefix + "." +
+            String(i).padStart(3, "0");
+
+        const partKey =
+            CONFIG.cacheVersion + ":part:" + partName;
+
+        statusText.textContent =
+            "Downloading " + partName;
+
+        details.textContent =
+            "Part " + (i + 1) +
+            " of " + partCount +
+            " — IndexedDB fallback";
+
+        let partBlob = null;
+
+        // Reuse a previously downloaded part.
+        try {
+
+            const saved = await idbGet(partKey);
+
+            if (
+                saved &&
+                saved.blob instanceof Blob &&
+                saved.blob.size > 0 &&
+                saved.size === saved.blob.size
+            ) {
+                partBlob = saved.blob;
+            }
+
+        } catch (error) {
+            console.warn("Part cache read:", error);
+        }
+
+        // Download missing parts.
+        if (!partBlob) {
+
+            const response = await fetch(
+                CONFIG.buildURL + partName,
+                { cache: "no-store" }
+            );
+
+            if (!response.ok) {
+                throw new Error(
+                    "Download failed: " + partName +
+                    "\nHTTP " + response.status
+                );
+            }
+
+            partBlob = await response.blob();
+
+            if (!partBlob.size) {
+                throw new Error(
+                    "Downloaded part is empty: " + partName
+                );
+            }
+
+            await idbPut(partKey, {
+                blob: partBlob,
+                size: partBlob.size,
+                version: CONFIG.cacheVersion
+            });
+        }
+
+        parts.push(partBlob);
+        totalBytes += partBlob.size;
+
+        progressCallback(i + 1);
+
+        console.log(
+            "Part ready:",
+            partName,
+            partBlob.size
+        );
+
+        await yieldUI();
+    }
+
+    statusText.textContent =
+        "Combining " + prefix + "...";
+
+    details.textContent =
+        "Creating merged Blob from cached parts.";
+
+    const mergedBlob = new Blob(parts, {
+        type: prefix === CONFIG.wasmPrefix
+            ? "application/wasm"
+            : "application/octet-stream"
+    });
+
+    if (
+        mergedBlob.size === 0 ||
+        mergedBlob.size !== totalBytes
+    ) {
+        throw new Error(
+            "IndexedDB merge validation failed: " + prefix
+        );
+    }
+
+    await idbPut(
+        CONFIG.cacheVersion + ":" + prefix,
+        {
+            blob: mergedBlob,
+            size: mergedBlob.size,
+            version: CONFIG.cacheVersion
+        }
+    );
+
+    return mergedBlob;
+}
+
+
+/* =========================================
+   MERGE SELECTOR
+========================================= */
+
+async function mergeFile(
+    prefix,
+    partCount,
+    progressCallback
+) {
+
+    if (storageMode === "opfs") {
+
+        return await mergeOPFS(
+            prefix,
+            partCount,
+            progressCallback
+        );
+    }
+
+    if (storageMode === "indexeddb") {
+
+        return await mergeIndexedDB(
+            prefix,
+            partCount,
+            progressCallback
+        );
+    }
+
+    throw new Error("Storage has not been initialized.");
+}
+
+
+/* =========================================
    PREPARE GAME FILES
-===================================== */
+========================================= */
 
 async function prepareGameFiles() {
 
-    statusText.textContent =
-        "Initializing storage...";
-
-    details.textContent =
-        "Checking browser storage.";
-
-    const root =
-        await initializeStorage();
-
-    if (navigator.storage.estimate) {
-
-        const estimate =
-            await navigator.storage.estimate();
-
-        console.log(
-            "Storage estimate:",
-            estimate
-        );
-
-        if (
-            estimate.quota != null &&
-            estimate.usage != null
-        ) {
-
-            const available =
-                estimate.quota - estimate.usage;
-
-            console.log(
-                "Available storage:",
-                available
-            );
-        }
-    }
-
-    /* GAME DATA */
+    await initializeStorage();
 
     statusText.textContent =
         "Preparing game data...";
 
-    const dataFile =
-        await mergeFile(
-            root,
-            CONFIG.dataPrefix,
-            CONFIG.dataParts,
-
-            completed => {
-
-                completedData = completed;
-
-                updateProgress();
-            }
-        );
-
-    /* WEBASSEMBLY */
+    const dataFile = await mergeFile(
+        CONFIG.dataPrefix,
+        CONFIG.dataParts,
+        completed => {
+            updatePartProgress(
+                CONFIG.dataPrefix,
+                completed
+            );
+        }
+    );
 
     statusText.textContent =
         "Preparing WebAssembly...";
 
-    const wasmFile =
-        await mergeFile(
-            root,
-            CONFIG.wasmPrefix,
-            CONFIG.wasmParts,
-
-            completed => {
-
-                completedWasm = completed;
-
-                updateProgress();
-            }
-        );
+    const wasmFile = await mergeFile(
+        CONFIG.wasmPrefix,
+        CONFIG.wasmParts,
+        completed => {
+            updatePartProgress(
+                CONFIG.wasmPrefix,
+                completed
+            );
+        }
+    );
 
     return {
         dataFile,
@@ -776,9 +1032,9 @@ async function prepareGameFiles() {
 }
 
 
-/* =====================================
+/* =========================================
    UNITY LOADER
-===================================== */
+========================================= */
 
 async function loadUnityLoader() {
 
@@ -789,11 +1045,12 @@ async function loadUnityLoader() {
     statusText.textContent =
         "Loading Unity engine...";
 
-    const script =
-        document.createElement("script");
+    const script = document.createElement("script");
 
-    script.src =
-        CONFIG.buildURL + CONFIG.loader;
+    script.src = new URL(
+        CONFIG.buildURL + CONFIG.loader,
+        document.baseURI
+    ).href;
 
     script.async = true;
 
@@ -802,37 +1059,40 @@ async function loadUnityLoader() {
         script.onload = resolve;
 
         script.onerror = () => {
-
-            reject(
-                new Error(
-                    "Could not load Unity loader:\n" +
-                    script.src
-                )
-            );
+            reject(new Error(
+                "Could not load Unity loader:\n" +
+                script.src +
+                "\nCheck the GitHack URL and internet connection."
+            ));
         };
 
         document.head.appendChild(script);
     });
 
     if (typeof createUnityInstance !== "function") {
-
         throw new Error(
-            "Unity loader loaded but createUnityInstance is missing."
+            "Unity loader loaded, but createUnityInstance is missing."
         );
     }
 }
 
 
-/* =====================================
+/* =========================================
    START GAME
-===================================== */
+========================================= */
 
 async function startGame() {
+
+    if (starting) return;
+
+    starting = true;
 
     try {
 
         errorElement.style.display = "none";
         retryButton.style.display = "none";
+
+        unityContainer.style.display = "none";
 
         completedData = 0;
         completedWasm = 0;
@@ -842,43 +1102,44 @@ async function startGame() {
         statusText.textContent =
             "Preparing Hollow Knight...";
 
-        const files =
-            await prepareGameFiles();
+        details.textContent =
+            "Initializing storage.";
+
+        const files = await prepareGameFiles();
 
         statusText.textContent =
-            "Loading Unity engine...";
+            "Preparing Unity engine...";
 
         details.textContent =
-            "Preparing WebAssembly and game data.";
+            "Creating game file URLs.";
 
         setOverall(70);
 
-        // Create URLs without reading the complete
+        // Blob URLs avoid converting the complete
         // files into JavaScript ArrayBuffers.
 
-        const dataURL =
-            URL.createObjectURL(files.dataFile);
+        const dataURL = URL.createObjectURL(
+            files.dataFile
+        );
 
-        const wasmBlob =
-            new Blob(
-                [files.wasmFile],
-                { type: "application/wasm" }
-            );
+        const wasmBlob = new Blob(
+            [files.wasmFile],
+            { type: "application/wasm" }
+        );
 
-        const wasmURL =
-            URL.createObjectURL(wasmBlob);
+        const wasmURL = URL.createObjectURL(
+            wasmBlob
+        );
 
-        // Keep these URLs alive while Unity runs.
         window.hollowKnightBlobURLs = [
             dataURL,
             wasmURL
         ];
 
-        const buildURL =
-            new URL(
-                CONFIG.buildURL,
-                document.baseURI
-            ).href;
+        const buildURL = new URL(
+            CONFIG.buildURL,
+            document.baseURI
+        ).href;
 
         const config = {
 
@@ -905,41 +1166,34 @@ async function startGame() {
                 CONFIG.productVersion
         };
 
-        // Load the Unity loader with error handling.
         await loadUnityLoader();
 
         statusText.textContent =
             "Starting Hollow Knight...";
 
         details.textContent =
-            "Initializing the game engine.";
+            "Initializing game engine.";
 
         unityContainer.style.display = "flex";
 
         canvas.style.visibility = "hidden";
 
-        const unityInstance =
-            await createUnityInstance(
-                canvas,
-                config,
+        const unityInstance = await createUnityInstance(
+            canvas,
+            config,
+            progress => {
 
-                progress => {
+                setOverall(70 + progress * 30);
 
-                    const value =
-                        70 + progress * 30;
+                statusText.textContent =
+                    "Loading Hollow Knight...";
 
-                    setOverall(value);
+                details.textContent =
+                    "Initializing game engine.";
+            }
+        );
 
-                    statusText.textContent =
-                        "Loading Hollow Knight...";
-
-                    details.textContent =
-                        "Initializing game engine.";
-                }
-            );
-
-        window.unityInstance =
-            unityInstance;
+        window.unityInstance = unityInstance;
 
         canvas.style.visibility = "visible";
 
@@ -951,18 +1205,13 @@ async function startGame() {
         details.textContent =
             "Enjoy your game.";
 
-        // Hide loading screen.
         loadingScreen.style.opacity = "0";
 
         setTimeout(() => {
-
             loadingScreen.style.display = "none";
-
         }, 500);
 
-        // Fullscreen button.
         $("fullscreenButton").onclick = () => {
-
             unityInstance.SetFullscreen(1);
         };
 
@@ -985,25 +1234,48 @@ async function startGame() {
         errorElement.style.display = "block";
 
         errorElement.textContent =
-            error.stack || error.message || String(error);
+            error.stack ||
+            error.message ||
+            String(error);
 
         retryButton.style.display =
             "inline-block";
 
         details.textContent =
-            "An error occurred. Check the error message above.";
+            "An error occurred. See the error message above.";
+
+    } finally {
+
+        starting = false;
     }
 }
 
 
-/* =====================================
+/* =========================================
+   GLOBAL ERROR HANDLING
+========================================= */
+
+window.addEventListener("error", event => {
+    console.error(
+        "Page error:",
+        event.error || event.message
+    );
+});
+
+window.addEventListener("unhandledrejection", event => {
+    console.error(
+        "Unhandled promise rejection:",
+        event.reason
+    );
+});
+
+
+/* =========================================
    INITIALIZE
-===================================== */
+========================================= */
 
 window.addEventListener("load", () => {
-
     startGame();
-
 });
 
 </script>
